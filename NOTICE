@@ -1,0 +1,25 @@
+This project is licensed under the GNU General Public License version 3.
+
+The following build-time and runtime integration files were copied from
+MapAdKiller by ldxm666, commit f0959478ff39a8753d653cf3491a7f4182f23a0c:
+
+  app/stub-src/io/github/libxposed/api/*
+  app/src/io/github/libxposed/service/*
+  app/libs/service-classes.jar
+
+Source: https://github.com/ldxm666/MapAdKiller
+License: GPL-3.0; see LICENSE in this directory.
+
+The QQ Music APK is not distributed with this project.
+
+The APK bundles these libraries for runtime DEX fingerprint discovery:
+
+  DexKit 2.0.6 (org.luckypray:dexkit)
+    https://github.com/LuckyPray/DexKit
+  FlatBuffers Java 23.5.26 (com.google.flatbuffers:flatbuffers-java)
+    https://github.com/google/flatbuffers
+  Kotlin standard library 1.5.0 (org.jetbrains.kotlin:kotlin-stdlib)
+    https://github.com/JetBrains/kotlin
+
+These components are distributed under Apache License 2.0. A copy is included
+in app/META-INF/licenses/Apache-2.0.txt and in the built APK.

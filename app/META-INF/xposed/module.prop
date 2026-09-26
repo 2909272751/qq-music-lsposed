@@ -1,0 +1,11 @@
+minApiVersion=101
+targetApiVersion=102
+staticScope=true
+exceptionMode=protective
+autoHotReload=false
+id=io.github.qqmusicclean
+name=QQ 音乐精简
+version=0.5.3
+versionCode=8
+author=Codex
+description=QQ 音乐开屏广告拦截与可选页面精简，逐项检测并显示适配状态

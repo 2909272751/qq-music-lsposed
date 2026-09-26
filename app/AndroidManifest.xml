@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="io.github.qqmusicclean"
+    android:versionCode="8"
+    android:versionName="0.5.3">
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="34" />
+    <queries><package android:name="com.tencent.qqmusic" /></queries>
+    <application
+        android:name=".App"
+        android:label="QQ 音乐精简"
+        android:description="@string/description"
+        android:icon="@drawable/ic_launcher"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar"
+        android:usesCleartextTraffic="false">
+        <activity android:name=".MainActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <provider
+            android:name="io.github.libxposed.service.XposedProvider"
+            android:authorities="io.github.qqmusicclean.XposedService"
+            android:exported="true" />
+        <provider
+            android:name=".StatusProvider"
+            android:authorities="io.github.qqmusicclean.status"
+            android:exported="true" />
+        <receiver android:name=".StatusReceiver" android:exported="true">
+            <intent-filter><action android:name="io.github.qqmusicclean.REPORT" /></intent-filter>
+        </receiver>
+    </application>
+</manifest>

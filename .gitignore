@@ -1,0 +1,8 @@
+/reference-apk/
+/reference-mapadkiller/
+/app/dist/
+/app/.build/
+/app/debug.keystore
+/SKILL.md
+/.idea/
+*.iml
