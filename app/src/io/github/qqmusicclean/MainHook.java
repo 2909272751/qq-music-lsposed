@@ -50,6 +50,8 @@ public final class MainHook extends XposedModule {
     private final AtomicInteger reportDone = new AtomicInteger();
     private String probeFailure;
     private boolean probePartial;
+    /** 全部入口都挂上时的说明文字（probeFailure 为空时用它当 detail）。 */
+    private String probeDetail;
     private volatile boolean homeScanPending;
     private volatile boolean configComplete;
     private ScanOverlay scanOverlay;
@@ -118,6 +120,8 @@ public final class MainHook extends XposedModule {
             probe("benefits", !Config.read(preferences, Config.SHOW_BENEFITS, false),
                     new Runnable() { @Override public void run() { installBenefitsRemoval(targetLoader); } });
             probe("preload", reducePreload, new Runnable() { @Override public void run() { installPreloadLimit(targetLoader); } });
+            probe("push_notify", Config.read(preferences, Config.BLOCK_PUSH_NOTIFY, true),
+                    new Runnable() { @Override public void run() { installPushNotify(); } });
             if (Config.read(preferences, Config.DIAGNOSTICS, false))
                 installHeaderDiagnostics(targetLoader);
             configComplete = true;
@@ -129,9 +133,106 @@ public final class MainHook extends XposedModule {
                     + (homeScanPending ? "; home fingerprint scan continues in background" : ""));
     }
 
+    /**
+     * 推送通知广告闸门：挂 {@code NotificationManager}。
+     *
+     * <p>{@code notify(...)} 是 QQ 音乐进程内所有通知的唯一出口——厂商推送、自建长连接、轮询
+     * 拉回来的推广最终都要调它；而且它是平台类、不参与 R8 混淆，QQ 音乐改版改名的是它自己的类，
+     * 这里不受影响。
+     *
+     * <p>{@code createNotificationChannel} 只观测不拦截：把渠道拦掉会让后续 notify 抛异常，更糟。
+     * 播放与下载通知必须活着，所以判据在 {@link NotifyGate} 里刻意避开歌名/歌手/播放侧用词。
+     */
+    private void installPushNotify() {
+        int expect = 4;
+        int got = 0;
+        Class<?>[] plain = {int.class, android.app.Notification.class};
+        Class<?>[] tagged = {String.class, int.class, android.app.Notification.class};
+        for (Class<?>[] signature : new Class<?>[][]{plain, tagged}) {
+            final boolean withTag = signature == tagged;
+            try {
+                Method target = android.app.NotificationManager.class.getDeclaredMethod("notify", signature);
+                hook(target).setId(withTag ? "qqmusic_push_notify_tagged" : "qqmusic_push_notify_plain")
+                        .intercept(new XposedInterface.Hooker() {
+                            @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+                                // 判据全在 NotifyGate 里，任何异常它自己 fail-open 放行。
+                                NotifyGate.Decision decision = NotifyGate.evaluate(
+                                        (android.app.Notification) chain.getArg(withTag ? 2 : 1),
+                                        withTag ? (String) chain.getArg(0) : null);
+                                if (decision.suppress) {
+                                    // 不调 proceed() = 通知根本不下发；播放/下载通知完全不受影响。
+                                    log(Log.INFO, TAG, "push_notify suppressed by: " + decision.reason);
+                                    report("running", "push_notify", "matched", NotifyGate.stats());
+                                    return null;
+                                }
+                                return chain.proceed(); // 放行路径零日志、零分配
+                            }
+                        });
+                log(Log.INFO, TAG, "hooked: push_notify notify(" + signature.length + " args)");
+                got++;
+            } catch (Throwable error) {
+                log(Log.WARN, TAG, "push_notify notify hook unavailable", error);
+            }
+        }
+        try {
+            Method target = android.app.NotificationManager.class.getDeclaredMethod(
+                    "createNotificationChannel", android.app.NotificationChannel.class);
+            hook(target).setId("qqmusic_push_notify_channel").intercept(new XposedInterface.Hooker() {
+                @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+                    Object result = chain.proceed();
+                    try {
+                        NotifyGate.Decision d = NotifyGate.evaluateChannel(
+                                (android.app.NotificationChannel) chain.getArg(0));
+                        if (d.suppress) log(Log.INFO, TAG, "push_notify ad channel: " + d.reason);
+                    } catch (Throwable ignored) {}
+                    return result;
+                }
+            });
+            log(Log.INFO, TAG, "hooked: push_notify createNotificationChannel");
+            got++;
+        } catch (Throwable error) {
+            log(Log.WARN, TAG, "push_notify channel hook unavailable", error);
+        }
+        try {
+            Method target = android.app.NotificationManager.class.getDeclaredMethod(
+                    "createNotificationChannels", List.class);
+            hook(target).setId("qqmusic_push_notify_channels").intercept(new XposedInterface.Hooker() {
+                @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+                    Object result = chain.proceed();
+                    try {
+                        Object arg = chain.getArg(0);
+                        if (arg instanceof List) {
+                            for (Object channel : (List<?>) arg) {
+                                NotifyGate.Decision d = NotifyGate.evaluateChannel(
+                                        (android.app.NotificationChannel) channel);
+                                if (d.suppress) log(Log.INFO, TAG, "push_notify ad channel: " + d.reason);
+                            }
+                        }
+                    } catch (Throwable ignored) {}
+                    return result;
+                }
+            });
+            log(Log.INFO, TAG, "hooked: push_notify createNotificationChannels");
+            got++;
+        } catch (Throwable error) {
+            log(Log.WARN, TAG, "push_notify channels hook unavailable", error);
+        }
+        if (got < expect) {
+            // 只挂上部分入口必须单独报出，不许算成"全部生效"。
+            probePartial = true;
+            probeFailure = "只挂上 " + got + "/" + expect + " 个通知入口，已挂上的判定仍有效";
+        } else {
+            // 没有真机广告通知时，用固定样本证明"判定函数本身"是对的（含播放侧负样本）。
+            String selfTest = NotifyGate.selfTest();
+            log(Log.INFO, TAG, selfTest);
+            probeDetail = "通知下发与渠道创建入口已挂接（" + got + "/" + expect + "）；" + selfTest;
+        }
+    }
+
     private void probe(String feature, boolean enabled, Runnable action) {
         probeFailure = null;
         probePartial = false;
+        probeDetail = null;
         if (enabled) {
             try { action.run(); }
             catch (Throwable error) { probeFailure = error.toString(); log(Log.WARN, TAG, feature + " probe failed", error); }
@@ -142,7 +243,7 @@ public final class MainHook extends XposedModule {
         }
         reportDone.incrementAndGet();
         String state = !enabled ? "off" : probePartial ? "partial" : probeFailure == null ? "matched" : "miss";
-        String detail = probeFailure == null ? "" : probeFailure;
+        String detail = probeFailure != null ? probeFailure : probeDetail == null ? "" : probeDetail;
         report("running", feature, state, detail);
         log(Log.INFO, TAG, "feature=" + feature + " result=" + state + (detail.isEmpty() ? "" : " reason=" + detail));
     }

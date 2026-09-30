@@ -4,9 +4,9 @@ import android.content.SharedPreferences;
 
 final class Config {
     static final String PACKAGE = "com.tencent.qqmusic";
-    static final String[] FEATURES = {"cold", "hot", "tabs", "home", "promo", "recognizer", "benefits", "preload"};
-    static final String[] FEATURE_LABELS = {"冷启动开屏", "热启动开屏", "底部标签", "首页仅推荐", "首页推广区", "听歌识曲入口", "福利入口", "预加载"};
-    static final String REPORT_SCHEMA = "8";
+    static final String[] FEATURES = {"cold", "hot", "tabs", "home", "promo", "recognizer", "benefits", "preload", "push_notify"};
+    static final String[] FEATURE_LABELS = {"冷启动开屏", "热启动开屏", "底部标签", "首页仅推荐", "首页推广区", "听歌识曲入口", "福利入口", "预加载", "推送通知广告"};
+    static final String REPORT_SCHEMA = "9";
     static final String GROUP = "qqmusic_clean_settings";
     static final String BLOCK_SPLASH = "block_splash";
     static final String REDUCE_PRELOAD = "reduce_preload";
@@ -19,6 +19,7 @@ final class Config {
     static final String SHOW_RECOGNIZER = "show_recognizer";
     static final String SHOW_BENEFITS = "show_benefits";
     static final String DIAGNOSTICS = "diagnostics";
+    static final String BLOCK_PUSH_NOTIFY = "block_push_notify";
 
     private Config() {}
 

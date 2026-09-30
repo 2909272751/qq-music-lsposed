@@ -87,6 +87,13 @@ public final class MainActivity extends Activity {
         toggle(splashCard, Config.BLOCK_SPLASH, "拦截开屏广告", "走 QQ 音乐自身的无广告启动流程", true);
         body.addView(splashCard);
 
+        section(body, "推送通知");
+        LinearLayout notifyCard = card();
+        addNote(notifyCard, "对应页面：通知栏。只拦广告通知，播放中、下载完成的通知照常显示。", 12);
+        toggle(notifyCard, Config.BLOCK_PUSH_NOTIFY, "拦截推送通知广告",
+                "拦通知下发这个唯一出口：先判通知渠道，再判标题正文里的广告词", true);
+        body.addView(notifyCard);
+
         section(body, "底部标签页");
         LinearLayout tabsCard = card();
         addNote(tabsCard, "首页固定保留。关闭其他标签会隐藏入口，重新打开 QQ 音乐后生效。", 12);
