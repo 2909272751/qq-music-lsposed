@@ -28,8 +28,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.ConcurrentHashMap;
 import org.luckypray.dexkit.DexKitBridge;
+import org.luckypray.dexkit.query.FindClass;
 import org.luckypray.dexkit.query.FindMethod;
+import org.luckypray.dexkit.query.enums.StringMatchType;
+import org.luckypray.dexkit.query.matchers.ClassMatcher;
 import org.luckypray.dexkit.query.matchers.MethodMatcher;
+import org.luckypray.dexkit.result.ClassData;
 import org.luckypray.dexkit.result.MethodData;
 
 /** Per-feature structural probes. No polling or hooks in the player process. */
@@ -580,23 +584,75 @@ public final class MainHook extends XposedModule {
         return found;
     }
 
+    private static final String BEANS = "com.tencent.qqmusic.modular.module.musichall.beans.";
+    private static final String VIEWS = "com.tencent.qqmusic.modular.module.musichall.views.";
+    /** 推广货架的标题文案：两个词都命中才算推广位，只命中一个可能是别的卡片。 */
+    private static final String PROMO_WORD_A = "随时随地";
+    private static final String PROMO_WORD_B = "停不下来";
+
+    /**
+     * 隐藏首页「随时随地，停不下来」推广货架。
+     *
+     * <p>这一段以前是写死混淆名的（{@code views.r#b0}、{@code p0#B()}），
+     * 结果 20.7.5.8 和 20.9.0.8 上全 miss——QQ 音乐每个版本都在改这些名字：
+     * 7458 上适配器已经是 {@code views.q#b0}，货架模型也从 {@code p0} 变成 {@code q0}。
+     *
+     * <p>现在改成按签名找，不认名字：cell→group 的取法看「单参是 cell、返回值还是 beans 包里的类」；
+     * 数据入口看 views 包里唯一的 {@code (List)->void}；标题不再挑某个 getter，
+     * 而是把 group 上所有无参 String getter 都试一遍，谁返回推广文案就用谁。
+     * 找不到唯一候选就整项跳过并写明原因，绝不猜。
+     */
     private void installHomePromoFilter(ClassLoader loader) {
         try {
-            Class<?> cell = loader.loadClass("com.tencent.qqmusic.modular.module.musichall.beans.k");
-            Class<?> shelf = loader.loadClass("com.tencent.qqmusic.modular.module.musichall.beans.p0");
-            Class<?> helper = loader.loadClass("com.tencent.qqmusic.modular.module.musichall.beans.l");
-            Class<?> adapter = loader.loadClass("com.tencent.qqmusic.modular.module.musichall.views.r");
-            Class<?> callback = loader.loadClass("kotlin.jvm.functions.Function0");
-            Method parent = helper.getDeclaredMethod("b", cell);
-            Method title = shelf.getDeclaredMethod("B");
-            Method setData = adapter.getDeclaredMethod("b0", List.class, boolean.class);
-            Method setDiff = adapter.getDeclaredMethod("f0", List.class, callback, boolean.class);
-            if (setData.getReturnType() != void.class || setDiff.getReturnType() != void.class
-                    || title.getReturnType() != String.class
-                    || parent.getReturnType() != shelf)
-                throw new NoSuchMethodException("home shelf model structure changed");
-            parent.setAccessible(true);
-            title.setAccessible(true);
+            Class<?> cell = loader.loadClass(BEANS + "k");
+            Class<?> helper = loader.loadClass(BEANS + "l");
+
+            // 1) cell -> group：helper 里唯一的「单参 cell、返回值是 beans 里的类」的静态方法
+            Method groupOf = null;
+            int groupCandidates = 0;
+            for (Method m : helper.getDeclaredMethods()) {
+                Class<?>[] p = m.getParameterTypes();
+                if (p.length != 1 || p[0] != cell) continue;
+                Class<?> ret = m.getReturnType();
+                if (ret.isPrimitive() || ret == void.class || !ret.getName().startsWith(BEANS)) continue;
+                groupCandidates++;
+                groupOf = m;
+            }
+            if (groupCandidates != 1 || groupOf == null)
+                throw new NoSuchMethodException("cell->group accessor candidates=" + groupCandidates);
+
+            // 2) 标题：group 上全部无参 String getter，运行时按文案认
+            Class<?> group = groupOf.getReturnType();
+            ArrayList<Method> titles = new ArrayList<>();
+            for (Method m : group.getDeclaredMethods()) {
+                if (m.getParameterTypes().length == 0 && m.getReturnType() == String.class) titles.add(m);
+            }
+            if (titles.isEmpty()) throw new NoSuchMethodException("group exposes no String getter");
+
+            // 3) 数据入口：views 包里唯一的 (List)->void
+            Method setData = null;
+            int dataCandidates = 0;
+            String[] shortNames = new String[52];
+            for (int i = 0; i < 26; i++) { shortNames[i] = String.valueOf((char) ('a' + i)); }
+            for (int i = 0; i < 26; i++) { shortNames[26 + i] = (char) ('a' + i) + "0"; }
+            for (String simple : shortNames) {
+                Class<?> type;
+                try { type = loader.loadClass(VIEWS + simple); } catch (Throwable ignored) { continue; }
+                for (Method m : type.getDeclaredMethods()) {
+                    Class<?>[] p = m.getParameterTypes();
+                    if (p.length != 1 || p[0] != List.class || m.getReturnType() != void.class) continue;
+                    dataCandidates++;
+                    setData = m;
+                }
+            }
+            if (dataCandidates != 1 || setData == null)
+                throw new NoSuchMethodException("home list data-set candidates=" + dataCandidates);
+
+            groupOf.setAccessible(true);
+            for (Method t : titles) t.setAccessible(true);
+            final Method groupAccessor = groupOf;
+            final Method[] titleGetters = titles.toArray(new Method[0]);
+
             XposedInterface.Hooker filter = new XposedInterface.Hooker() {
                 @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
                     Object[] args = new Object[chain.getExecutable().getParameterCount()];
@@ -610,16 +666,22 @@ public final class MainHook extends XposedModule {
                         List<?> rows = (List<?>) batch;
                         ArrayList<Object> kept = new ArrayList<>(rows.size());
                         for (Object row : rows) {
-                            Object group;
-                            String label;
+                            boolean promo = false;
                             try {
-                                group = parent.invoke(null, row);
-                                label = group == null ? null : (String) title.invoke(group);
+                                Object g = groupAccessor.invoke(null, row);
+                                if (g != null) {
+                                    for (Method title : titleGetters) {
+                                        Object label = title.invoke(g);
+                                        if (label instanceof String && ((String) label).contains(PROMO_WORD_A)
+                                                && ((String) label).contains(PROMO_WORD_B)) { promo = true; break; }
+                                    }
+                                }
                             } catch (Throwable error) {
+                                // 反射失败不删数据：宁可漏掉一个推广位，也不能把正常货架吃掉
                                 kept.add(row);
                                 continue;
                             }
-                            if (label != null && label.contains("随时随地") && label.contains("停不下来")) hidden++;
+                            if (promo) hidden++;
                             else kept.add(row);
                         }
                         filtered.add(kept);
@@ -633,12 +695,17 @@ public final class MainHook extends XposedModule {
                 }
             };
             hook(setData).setId("qqmusic_hide_home_promo_set_data").intercept(filter);
-            hook(setDiff).setId("qqmusic_hide_home_promo_set_diff").intercept(filter);
-            log(Log.INFO, TAG, "hooked: home promotional shelf adapter data filter");
+            log(Log.INFO, TAG, "hooked: home promotional shelf data filter on "
+                    + setData.getDeclaringClass().getName() + "#" + setData.getName()
+                    + " group=" + group.getName() + " titles=" + titleGetters.length);
         } catch (Throwable error) {
             probeFailure = error.toString();
             log(Log.WARN, TAG, "home promotional shelf filter unavailable", error);
         }
+    }
+
+    private static String simple(Class<?> c) {
+        return c == void.class ? "void" : c.getSimpleName();
     }
 
     private void installRecognizerRemoval(ClassLoader loader) {
