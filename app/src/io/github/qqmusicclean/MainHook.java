@@ -55,6 +55,8 @@ public final class MainHook extends XposedModule {
     private volatile boolean homeScanPending;
     private volatile boolean configComplete;
     private ScanOverlay scanOverlay;
+    /** 宿主版本在 Config.VERIFIED_VERSIONS 里：省掉打开时的扫描弹窗，规则照常安装。 */
+    private boolean verifiedHost;
     private final ConcurrentHashMap<String, String> featureStates = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, String> featureDetails = new ConcurrentHashMap<>();
 
@@ -96,8 +98,16 @@ public final class MainHook extends XposedModule {
             configComplete = false;
             featureStates.clear();
             featureDetails.clear();
+            // 已实测过的版本区间：规则照常装，但不再走「打开时的扫描适配测试」弹窗。
+            // 省的是弹窗和重复探测，不是钩子。
+            verifiedHost = Config.isVerified(info.getLongVersionCode());
+            if (verifiedHost) {
+                log(Log.INFO, TAG, "verified QQ Music version " + version + " ("
+                        + info.versionCode + "), covered " + Config.VERIFIED_MIN + "~"
+                        + Config.VERIFIED_MAX + ": skip on-open scan prompt");
+            }
             scanOverlay = new ScanOverlay(application, context, reportToken);
-            if (scanOverlay.needsPrompt()) installActivityObserver();
+            if (!verifiedHost && scanOverlay.needsPrompt()) installActivityObserver();
             report("running", "", "", "");
             log(Log.INFO, TAG, "checking compatible hooks for QQ Music " + version);
             SharedPreferences preferences = getRemotePreferences(Config.GROUP);
@@ -127,7 +137,7 @@ public final class MainHook extends XposedModule {
             configComplete = true;
             if (!homeScanPending) {
                 report("complete", "", "", "");
-                showScanResult();
+                if (!verifiedHost) showScanResult();
             }
             log(Log.INFO, TAG, "quick compatibility probes complete for QQ Music " + version
                     + (homeScanPending ? "; home fingerprint scan continues in background" : ""));
