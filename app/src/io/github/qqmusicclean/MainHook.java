@@ -19,7 +19,6 @@ import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedModuleInterface;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.util.Collections;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -27,14 +26,6 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.ConcurrentHashMap;
-import org.luckypray.dexkit.DexKitBridge;
-import org.luckypray.dexkit.query.FindClass;
-import org.luckypray.dexkit.query.FindMethod;
-import org.luckypray.dexkit.query.enums.StringMatchType;
-import org.luckypray.dexkit.query.matchers.ClassMatcher;
-import org.luckypray.dexkit.query.matchers.MethodMatcher;
-import org.luckypray.dexkit.result.ClassData;
-import org.luckypray.dexkit.result.MethodData;
 
 /** Per-feature structural probes. No polling or hooks in the player process. */
 public final class MainHook extends XposedModule {
@@ -44,7 +35,6 @@ public final class MainHook extends XposedModule {
     private final AtomicBoolean configured = new AtomicBoolean(false);
     private final AtomicBoolean splashLogged = new AtomicBoolean(false);
     private final AtomicBoolean hotSplashLogged = new AtomicBoolean(false);
-    private final AtomicBoolean recommendLogged = new AtomicBoolean(false);
     private final AtomicBoolean recognizerLogged = new AtomicBoolean(false);
     private final AtomicBoolean benefitsLogged = new AtomicBoolean(false);
     private final AtomicBoolean diagnosticsLogged = new AtomicBoolean(false);
@@ -56,7 +46,6 @@ public final class MainHook extends XposedModule {
     private boolean probePartial;
     /** 全部入口都挂上时的说明文字（probeFailure 为空时用它当 detail）。 */
     private String probeDetail;
-    private volatile boolean homeScanPending;
     private volatile boolean configComplete;
     private ScanOverlay scanOverlay;
     /** 宿主版本在 Config.VERIFIED_VERSIONS 里：省掉打开时的扫描弹窗，规则照常安装。 */
@@ -98,7 +87,6 @@ public final class MainHook extends XposedModule {
             reportToken = info.versionCode + ":" + info.lastUpdateTime + ":" + Config.REPORT_SCHEMA;
             reportRun = System.currentTimeMillis();
             reportDone.set(0);
-            homeScanPending = false;
             configComplete = false;
             featureStates.clear();
             featureDetails.clear();
@@ -125,8 +113,6 @@ public final class MainHook extends XposedModule {
             if (!Config.read(preferences, Config.TAB_STAR, true)) hiddenTabs.add("星光");
             if (!Config.read(preferences, Config.TAB_MY, true)) hiddenTabs.add("我的");
             probe("tabs", !hiddenTabs.isEmpty(), new Runnable() { @Override public void run() { installTabVisibility(targetLoader, hiddenTabs); } });
-            probe("home", Config.read(preferences, Config.HOME_ONLY_RECOMMEND, false),
-                    new Runnable() { @Override public void run() { installRecommendOnly(context, targetLoader); } });
             probe("promo", Config.read(preferences, Config.HIDE_HOME_PROMO, true),
                     new Runnable() { @Override public void run() { installHomePromoFilter(targetLoader); } });
             probe("recognizer", !Config.read(preferences, Config.SHOW_RECOGNIZER, false),
@@ -139,12 +125,9 @@ public final class MainHook extends XposedModule {
             if (Config.read(preferences, Config.DIAGNOSTICS, false))
                 installHeaderDiagnostics(targetLoader);
             configComplete = true;
-            if (!homeScanPending) {
-                report("complete", "", "", "");
-                if (!verifiedHost) showScanResult();
-            }
-            log(Log.INFO, TAG, "quick compatibility probes complete for QQ Music " + version
-                    + (homeScanPending ? "; home fingerprint scan continues in background" : ""));
+            report("complete", "", "", "");
+            if (!verifiedHost) showScanResult();
+            log(Log.INFO, TAG, "quick compatibility probes complete for QQ Music " + version);
     }
 
     /**
@@ -250,10 +233,6 @@ public final class MainHook extends XposedModule {
         if (enabled) {
             try { action.run(); }
             catch (Throwable error) { probeFailure = error.toString(); log(Log.WARN, TAG, feature + " probe failed", error); }
-        }
-        if ("home".equals(feature) && homeScanPending) {
-            report("running", feature, "scanning", "读取 QQ 音乐代码，查找首页频道方法");
-            return;
         }
         reportDone.incrementAndGet();
         String state = !enabled ? "off" : probePartial ? "partial" : probeFailure == null ? "matched" : "miss";
@@ -463,125 +442,6 @@ public final class MainHook extends XposedModule {
             probeFailure = error.toString();
             log(Log.WARN, TAG, "tab visibility unavailable", error);
         }
-    }
-
-    private void installRecommendOnly(Context context, ClassLoader loader) {
-        try {
-            Class<?> fragment = loader.loadClass("com.tencent.qqmusic.business.timeline.ui.HomePageFragment");
-            Method refresh = quickHomeMethod(context, fragment);
-            if (refresh == null) {
-                homeScanPending = true;
-                scanOverlay.begin(reportDone.get(), Config.FEATURES.length, "读取 QQ 音乐首页频道代码");
-                Thread discovery = new Thread(new Runnable() {
-                    @Override public void run() {
-                        String state = "ready";
-                        String detail = "已找到首页频道方法，重启 QQ 音乐后生效";
-                        try {
-                            scanOverlay.awaitVisibleProgress();
-                            scanHomeMethod(context, loader, fragment);
-                        } catch (Throwable error) {
-                            state = "miss";
-                            detail = error.toString();
-                            Log.e(TAG, "home channel scan failed", error);
-                        }
-                        reportDone.incrementAndGet();
-                        report("running", "home", state, detail);
-                        Log.i(TAG, "feature=home result=" + state + " reason=" + detail);
-                        homeScanPending = false;
-                        if (configComplete) {
-                            report("complete", "", "", "");
-                            showScanResult();
-                        }
-                    }
-                }, "qqmc-home-discovery");
-                discovery.setDaemon(true);
-                discovery.start();
-                return;
-            }
-            String detail = hookRecommendOnly(fragment, refresh);
-            if (!detail.isEmpty()) {
-                probePartial = true;
-                probeFailure = detail;
-            }
-        } catch (Throwable error) {
-            probeFailure = error.toString();
-            log(Log.WARN, TAG, "recommend-only home unavailable", error);
-        }
-    }
-
-    private String hookRecommendOnly(Class<?> fragment, Method refresh) throws Exception {
-        refresh.setAccessible(true);
-        hook(refresh).setId("qqmusic_optional_recommend_only").intercept(new XposedInterface.Hooker() {
-            @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
-                if (recommendLogged.compareAndSet(false, true))
-                    log(Log.INFO, TAG, "home channels: recommendation retained; extras skipped");
-                return chain.proceed(new Object[]{Collections.emptyList()});
-            }
-        });
-        Method linkedAd = firstMethod(fragment, new String[]{"O5", "M5", "T5"}, boolean.class, int.class);
-        Method rewardAd = firstMethod(fragment, new String[]{"P5", "N5", "U5"}, int.class);
-        if (linkedAd != null && rewardAd != null) {
-            XposedInterface.Hooker skipAdChannel = new XposedInterface.Hooker() {
-                @Override public Object intercept(XposedInterface.Chain chain) { return Boolean.FALSE; }
-            };
-            hook(linkedAd).setId("qqmusic_optional_skip_linked_ad_channel").intercept(skipAdChannel);
-            hook(rewardAd).setId("qqmusic_optional_skip_reward_ad_channel").intercept(skipAdChannel);
-            log(Log.INFO, TAG, "hooked: recommend-only home and ad channels");
-            return "";
-        }
-        log(Log.WARN, TAG, "home channels filtered; ad channel gates not found");
-        return "首页频道已过滤，广告频道方法未匹配";
-    }
-
-    private Method firstMethod(Class<?> owner, String[] names, Class<?>... params) {
-        for (String name : names) {
-            try {
-                Method method = owner.getDeclaredMethod(name, params);
-                if (method.getReturnType() == boolean.class) return method;
-            } catch (NoSuchMethodException ignored) { }
-        }
-        return null;
-    }
-
-    private Method quickHomeMethod(Context context, Class<?> owner) {
-        SharedPreferences cache = context.getSharedPreferences("qqmusicclean_discovery", Context.MODE_PRIVATE);
-        String cached = reportToken.equals(cache.getString("token", ""))
-                ? cache.getString("home_method", "") : "";
-        for (String name : new String[]{cached, "J6", "H6"}) {
-            if (name.isEmpty()) continue;
-            try {
-                Method method = owner.getDeclaredMethod(name, List.class);
-                if (method.getReturnType() == void.class) return method;
-            } catch (NoSuchMethodException ignored) { }
-        }
-        return null;
-    }
-
-    private Method scanHomeMethod(Context context, ClassLoader loader, Class<?> owner) throws Exception {
-        log(Log.INFO, TAG, "home method quick match missed; starting DexKit string scan");
-        report("running", "home", "scanning", "读取 QQ 音乐 DEX，查找首页频道代码特征");
-        System.loadLibrary("dexkit");
-        Method found = null;
-        try (DexKitBridge bridge = DexKitBridge.create(context.getApplicationInfo().sourceDir)) {
-            bridge.setThreadNum(2);
-            report("running", "home", "scanning", "解析首页频道方法及参数");
-            for (MethodData data : bridge.findMethod(FindMethod.create().matcher(
-                    MethodMatcher.create().usingStrings("[refreshTabsFragment] drop tab without fragment")))) {
-                if (!owner.getName().equals(data.getDeclaredClassName())) continue;
-                Method candidate = data.getMethodInstance(loader);
-                if (candidate.getReturnType() != void.class
-                        || candidate.getParameterTypes().length != 1
-                        || candidate.getParameterTypes()[0] != List.class) continue;
-                if (found != null) throw new NoSuchMethodException("ambiguous home channel methods");
-                found = candidate;
-            }
-        }
-        if (found == null) throw new NoSuchMethodException("home channel method fingerprint not found");
-        report("running", "home", "scanning", "校验首页频道方法并保存缓存");
-        SharedPreferences cache = context.getSharedPreferences("qqmusicclean_discovery", Context.MODE_PRIVATE);
-        cache.edit().putString("token", reportToken).putString("home_method", found.getName()).apply();
-        Log.i(TAG, "home method discovered by DexKit: " + found.getName());
-        return found;
     }
 
     private static final String BEANS = "com.tencent.qqmusic.modular.module.musichall.beans.";

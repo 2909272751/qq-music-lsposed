@@ -97,14 +97,15 @@ try {
     $serviceJar = Join-Path $stage 'libs\service-classes.jar'
     Write-Host 'Compiling API stubs and module'
     Run-Native 'API stub compilation' { & $javac -encoding UTF-8 -nowarn -source 8 -target 8 -bootclasspath $androidJar -d (Join-Path $stage 'stubs') @stubs }
-    $dexkitJar = Join-Path $stage 'libs\dexkit.jar'
-    $flatbuffersJar = Join-Path $stage 'libs\flatbuffers-java.jar'
+    # DexKit 已随「首页仅推荐」一起移除：System.loadLibrary("dexkit") 在宿主进程里
+    # 找的是宿主 so 目录，那套兜底扫描从来没跑起来过，所以不再把 dexkit/flatbuffers
+    # 打进 DEX，APK 也小一截。
     $kotlinJar = Join-Path $stage 'libs\kotlin-stdlib.jar'
-    $compilePath = ((Join-Path $stage 'stubs'), $serviceJar, $dexkitJar, $flatbuffersJar, $kotlinJar) -join ';'
+    $compilePath = ((Join-Path $stage 'stubs'), $serviceJar, $kotlinJar) -join ';'
     Run-Native 'Module compilation' { & $javac -encoding UTF-8 -nowarn -source 8 -target 8 -bootclasspath $androidJar -classpath $compilePath -d (Join-Path $stage 'classes') @sources }
     $classesJar = Join-Path $stage 'classes.jar'
     Run-Native 'JAR creation' { & $jar -cf $classesJar -C (Join-Path $stage 'classes') . }
-    Run-Native 'DEX conversion' { & $java -Xmx3072M -cp $d8Jar com.android.tools.r8.D8 --min-api 26 --lib $androidJar --output (Join-Path $stage 'dex') $classesJar $serviceJar $dexkitJar $flatbuffersJar $kotlinJar }
+    Run-Native 'DEX conversion' { & $java -Xmx3072M -cp $d8Jar com.android.tools.r8.D8 --min-api 26 --lib $androidJar --output (Join-Path $stage 'dex') $classesJar $serviceJar $kotlinJar }
 
     Write-Host 'Packaging Android resources'
     $compiledRes = Join-Path $stage 'resources.zip'
@@ -127,8 +128,10 @@ try {
             [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $_.FullName, $relative) | Out-Null
         }
     } finally { $archive.Dispose() }
-    Copy-Item -LiteralPath (Join-Path $app 'jni') -Destination (Join-Path $stage 'lib') -Recurse -Force
-    Run-Native 'Native library packaging' { & $jar -0uf $unsigned -C $stage lib }
+    # DexKit 已移除，不再打包 libdexkit.so（四个 ABI 合计约 1 MB，模块已无 JNI 依赖）
+    if (Test-Path -LiteralPath (Join-Path $app 'jni')) {
+        Run-Native 'Native library packaging' { & $jar -0uf $unsigned -C $stage lib }
+    }
     $aligned = Join-Path $stage 'out\module-aligned.apk'
     Run-Native 'APK alignment' { & $zipalign -f 4 $unsigned $aligned }
 

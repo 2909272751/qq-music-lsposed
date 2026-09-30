@@ -103,10 +103,9 @@ public final class MainActivity extends Activity {
         toggle(tabsCard, Config.TAB_MY, "显示「我的」", null, true);
         body.addView(tabsCard);
 
-        section(body, "首页频道");
+        section(body, "首页");
         LinearLayout homeCard = card();
-        toggle(homeCard, Config.HOME_ONLY_RECOMMEND, "只保留「推荐」", "隐藏首页其他频道；重新打开 QQ 音乐后生效", false);
-        toggle(homeCard, Config.HIDE_HOME_PROMO, "隐藏首页推广区", "尝试移除「随时随地，停不下来」区块", true);
+        toggle(homeCard, Config.HIDE_HOME_PROMO, "隐藏首页推广区", "移除「随时随地，停不下来」区块", true);
         body.addView(homeCard);
 
         section(body, "首页右上角");

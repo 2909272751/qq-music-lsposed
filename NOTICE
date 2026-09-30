@@ -12,14 +12,17 @@ License: GPL-3.0; see LICENSE in this directory.
 
 The QQ Music APK is not distributed with this project.
 
-The APK bundles these libraries for runtime DEX fingerprint discovery:
+The APK bundles these libraries:
 
-  DexKit 2.0.6 (org.luckypray:dexkit)
-    https://github.com/LuckyPray/DexKit
-  FlatBuffers Java 23.5.26 (com.google.flatbuffers:flatbuffers-java)
-    https://github.com/google/flatbuffers
   Kotlin standard library 1.5.0 (org.jetbrains.kotlin:kotlin-stdlib)
     https://github.com/JetBrains/kotlin
 
 These components are distributed under Apache License 2.0. A copy is included
 in app/META-INF/licenses/Apache-2.0.txt and in the built APK.
+
+DexKit (org.luckypray:dexkit) and FlatBuffers Java (com.google.flatbuffers)
+were bundled previously for a "recommendation-only home" feature and have been
+removed, along with their native libdexkit.so binaries. That feature relied on
+System.loadLibrary("dexkit"), which inside a hooked host process resolves against
+the host app's native library directory and therefore could never load the
+module's own copy.
